@@ -7,77 +7,94 @@
 #include <stdbool.h>
 #include <pthread.h>
 
-struct client{
+typedef struct{
     int FD;
-    char username[8];
-};
+    char username[17];
+} Client;
 
-struct client clients[100];
+Client clients[100];
 int numofClients = 0;
-pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t clientsMutex = PTHREAD_MUTEX_INITIALIZER;
 
-void broadcast(char* message, struct client sender){
-    pthread_mutex_lock(&clients_mutex);
+void broadcast(char* message, Client sender, bool option){
+    pthread_mutex_lock(&clientsMutex);
+
     char msg[1030];
-    snprintf(msg, sizeof(msg), "%s: %s", sender.username, message);
-    printf("%s",msg);
-     for (int i = 0; i < numofClients; i++) {
+    snprintf(msg, sizeof(msg), "%s%s %s", sender.username, option ? "" : ":", message);
+
+    for (int i = 0; i < numofClients; i++){
         if (clients[i].FD != sender.FD) {
             send(clients[i].FD, msg, strlen(msg), 0);
         }
     }
 
-    pthread_mutex_unlock(&clients_mutex);
+    pthread_mutex_unlock(&clientsMutex);
 }
 
-void* welcome_client(void* FD){
-    struct client Client;
-    Client.FD = *(int*)FD;
-    free(FD);
-    char buffer[1024];
-    char* message = "Enter a username: ";
+void addClient(Client client){
+    pthread_mutex_lock(&clientsMutex);
+    clients[numofClients++] = client;
+    pthread_mutex_unlock(&clientsMutex);
+}
 
-    send(Client.FD, message, strlen(message), 0);
+void setUsername(Client* client){
+    char buffer[17];
+    char* message = "Welcome! Enter a username (max 16 characters): ";
+    send(client->FD, message, strlen(message), 0);
     memset(buffer, 0, sizeof(buffer));
-    ssize_t bytes = recv(Client.FD, buffer, sizeof(buffer)-1, 0);
-    buffer[bytes-1] = '\0';
-    strcpy(Client.username, buffer);
-    
-    pthread_mutex_lock(&clients_mutex);
-    clients[numofClients++] = Client;
-    pthread_mutex_unlock(&clients_mutex);
-
-    while(1){
-        memset(buffer, 0, sizeof(buffer));
-        ssize_t bytes = recv(Client.FD, buffer, sizeof(buffer)-1, 0);
-        buffer[bytes] = '\0';
-
-        if(bytes <= 0){
-            printf("Client disconnected, fd = %d\n", Client.FD);
-            break;
-        }
-        
-        printf("Client %d: %s\n", Client.FD, buffer);
-        broadcast(buffer, Client);
+    ssize_t bytes = recv(client->FD, buffer, sizeof(buffer)-1, 0);
+    if (bytes <= 0){
+        strcpy(client->username, "guest");
+        return;
     }
+    buffer[bytes] = '\0';
+    buffer[strcspn(buffer, "\r\n")] = '\0';
+    strncpy(client->username, buffer, 16);
+    client->username[16] = '\0';
+    broadcast("connected!", *client, 1);
+}
 
-    pthread_mutex_lock(&clients_mutex);
-    struct client* temp = clients;
+void disconnectClient(Client* client){
+    pthread_mutex_lock(&clientsMutex);
     for (int i = 0; i < numofClients; i++) {
-        if (clients[i].FD == Client.FD) {
+        if (clients[i].FD == client->FD) {
             clients[i] = clients[numofClients - 1];
             numofClients--;
             break;
         }
     }
-    pthread_mutex_unlock(&clients_mutex);
-
-    close(Client.FD);
-
+    pthread_mutex_unlock(&clientsMutex);
+    broadcast("disconnected!", *client, 1);
+    close(client->FD);
+    free(client);
 }
 
-int main(int argc, char const* argv[])
-{
+void* chat(void* arg){
+    Client* client = (Client*)arg;
+    char buffer[1024];
+
+    setUsername(client);
+    addClient(*client);
+
+    while(1){
+        memset(buffer, 0, sizeof(buffer));
+        ssize_t bytes = recv(client->FD, buffer, sizeof(buffer) - 1, 0);
+        if (bytes <= 0) break;
+        buffer[bytes] = '\0';
+
+        if(bytes <= 0){
+            printf("Client disconnected, fd = %d\n", client->FD);
+            break;
+        }
+        
+        printf("Client %d: %s\n", client->FD, buffer);
+        broadcast(buffer, *client, 0);
+    }
+
+    disconnectClient(client);
+}
+
+int main(int argc, char const* argv[]){
     int serverFD;
     struct sockaddr_in address;
     int opt = 1;
@@ -111,9 +128,9 @@ int main(int argc, char const* argv[])
     }
     
     while(1){
-    int clientFD;
+    Client client;
 
-    if ((clientFD
+    if ((client.FD
          = accept(serverFD, (struct sockaddr*)&address,
                   &addrlen))
         < 0) {
@@ -121,15 +138,13 @@ int main(int argc, char const* argv[])
         exit(EXIT_FAILURE);
     }
 
-    printf("New client connected, fd = %d\n", clientFD);
+    printf("New client connected, fd = %d\n", client.FD);
 
-    int* clientPtr = malloc(sizeof(int));
-    *clientPtr = clientFD;
+    Client* clientPtr = malloc(sizeof(Client));
+    *clientPtr = client;
 
     pthread_t threadID;
-
-    pthread_create(&threadID, NULL, welcome_client, clientPtr);
-
+    pthread_create(&threadID, NULL, chat, clientPtr);
     pthread_detach(threadID);
     }
   
