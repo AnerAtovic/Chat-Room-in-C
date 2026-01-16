@@ -7,7 +7,7 @@
 #include <stdbool.h>
 #include <pthread.h>
 
-//add /cmds, different users, potentially a log in system
+// add encription, work with classes
 
 typedef struct{
     int FD;
@@ -15,50 +15,72 @@ typedef struct{
     char roomName[17];
 } Client;
 
-Client clients[100];
+Client* clients[100];
 int numOfClients = 0;
 pthread_mutex_t clientsMutex = PTHREAD_MUTEX_INITIALIZER;
 
-// basic info about the room, finds users with the same roomName value
-void printRoomInfo(Client client){
-    pthread_mutex_lock(&clientsMutex);
-    printf("entered active fun");
-    char listOfUsers[1800];
-    int activeUsers = 0;
-    memset(listOfUsers, 0, sizeof(listOfUsers));
-    for(int i = 0; i < numOfClients; i++){
-        if(strncmp(clients[i].roomName, client.roomName, strlen(client.roomName)) == 0){
-            printf("%s", clients[i].username);
-            snprintf(listOfUsers + strlen(listOfUsers), sizeof(listOfUsers), "%s\n", clients[i].username);
-            activeUsers++;
-        }
-    }
-    char *message;
-    snprintf(message, 1835, "Room name: %s\nActive users(%d):\n%s", client.roomName, activeUsers, listOfUsers);
-    send(client.FD, message, strlen(message), 0);
-    
-
-    pthread_mutex_unlock(&clientsMutex);
-}
 
 // messages are sent to everyone with the same roomName value, option = 1 removes : from message (until i find a better way to do this)
-void broadcast(char* message, Client sender, bool option, char* roomName){
+void broadcast(Client sender, char* message, bool option){
     pthread_mutex_lock(&clientsMutex);
 
     char msg[1030];
     snprintf(msg, sizeof(msg), "%s%s %s", sender.username, option ? "" : ":", message);
 
     for (int i = 0; i < numOfClients; i++){
-        if (clients[i].FD != sender.FD && strncmp(clients[i].roomName, roomName, 16) == 0) {
-            send(clients[i].FD, msg, strlen(msg), 0);
+        if (clients[i]->FD != sender.FD && strncmp(clients[i]->roomName, sender.roomName, 16) == 0) {
+            send(clients[i]->FD, msg, strlen(msg), 0);
         }
     }
 
     pthread_mutex_unlock(&clientsMutex);
 }
 
+
+// changes client's roomName
+void changeRoom(Client* client, char* roomName){
+    broadcast(*client, "disconnected!\n", 1);
+
+    pthread_mutex_lock(&clientsMutex);
+    strncpy(client->roomName, roomName, 16);
+    char* message = malloc(100);
+    snprintf(message, 100, "You entered a new room %s. Use /cmds to view commands.\n", client->roomName);
+    send(client->FD, message, strlen(message), 0);
+    free(message);
+    pthread_mutex_unlock(&clientsMutex);
+
+    broadcast(*client, "connected to your room!\n", 1);
+}
+
+// print commands
+void printCommands(Client client){
+    char* message = "Command list:\n/cmds - Prints out commands you can use.\n/room - Prints out room name and active users in the room.\n/joinroom - Allows you to switch rooms without disconnecting.\n";
+    send(client.FD, message, strlen(message), 0);
+}
+
+// basic info about the room, finds users with the same roomName value
+void printRoomInfo(Client client){
+    pthread_mutex_lock(&clientsMutex);
+    printf("sadasnja proba: %s", client.roomName);
+    char listOfUsers[1800];
+    int activeUsers = 0;
+    memset(listOfUsers, 0, sizeof(listOfUsers));
+    for(int i = 0; i < numOfClients; i++){
+        if(strncmp(clients[i]->roomName, client.roomName, strlen(clients[i]->roomName)) == 0){
+            snprintf(listOfUsers + strlen(listOfUsers), sizeof(listOfUsers), "%s\n", clients[i]->username);
+            activeUsers++;
+        }
+    }
+    char *message = malloc(1835);
+    snprintf(message, 1835, "Room name: %s\nActive users(%d):\n%s", client.roomName, activeUsers, listOfUsers);
+    send(client.FD, message, strlen(message), 0);
+    free(message);
+
+    pthread_mutex_unlock(&clientsMutex);
+}
+
 // adds client to the clients array
-void addClient(Client client){
+void addClient(Client* client){
     pthread_mutex_lock(&clientsMutex);
     clients[numOfClients++] = client;
     pthread_mutex_unlock(&clientsMutex);
@@ -69,7 +91,8 @@ void setUsername(Client* client){
     char buffer[17];
     
     // get username
-    char* message = "Welcome! Enter a username (max 16 characters): ";
+    char* message = malloc(100);
+    strcpy(message, "Welcome! Enter a username (max 16 characters): ");
     send(client->FD, message, strlen(message), 0);
     memset(buffer, 0, sizeof(buffer));
     ssize_t bytes = recv(client->FD, buffer, sizeof(buffer)-1, 0);
@@ -83,7 +106,7 @@ void setUsername(Client* client){
     client->username[16] = '\0';
 
     // get room name
-    message = "Enter room name to continue(max 16 characters): ";
+    strcpy(message, "Enter room name to continue(max 16 characters): ");
     send(client->FD, message, strlen(message), 0);
 
     memset(buffer, 0, sizeof(buffer));
@@ -96,7 +119,10 @@ void setUsername(Client* client){
     buffer[bytes] = '\0';
     buffer[strcspn(buffer, "\r\n")] = '\0';
     strncpy(client->roomName, buffer, 16);
-    broadcast("connected to your room!\n", *client, 1, client->roomName);
+    snprintf(message, 100, "You entered room %s. Use /cmds to view commands.\n", client->roomName);
+    send(client->FD, message, strlen(message), 0);
+    free(message);
+    broadcast(*client, "connected to your room!\n", 1);
 }
 
 
@@ -104,14 +130,14 @@ void setUsername(Client* client){
 void disconnectClient(Client* client){
     pthread_mutex_lock(&clientsMutex);
     for (int i = 0; i < numOfClients; i++) {
-        if (clients[i].FD == client->FD) {
+        if (clients[i]->FD == client->FD) {
             clients[i] = clients[numOfClients - 1];
             numOfClients--;
             break;
         }
     }
     pthread_mutex_unlock(&clientsMutex);
-    broadcast("disconnected!\n", *client, 1, client->roomName);
+    broadcast(*client, "disconnected!\n", 1);
     close(client->FD);
     free(client);
 }
@@ -121,9 +147,10 @@ void disconnectClient(Client* client){
 void* chat(void* arg){
     Client* client = (Client*)arg;
     char buffer[1024];
+    char* message;
 
     setUsername(client);
-    addClient(*client);
+    addClient(client);
 
     while(1){
         memset(buffer, 0, sizeof(buffer));
@@ -138,10 +165,24 @@ void* chat(void* arg){
         
         printf("Client in room %s %d: %s\n", client->roomName, client->FD, buffer);
 
-        if(strncmp(buffer, "/room", bytes-1) == 0 && bytes-1 == 5)
+        if(strncmp(buffer, "/room", bytes - 1) == 0 && bytes - 1 == 5)
             printRoomInfo(*client);
+        else if(strncmp(buffer, "/cmds", bytes - 1) == 0 && bytes - 1 == 5)
+            printCommands(*client);
+        else if (strncmp(buffer, "/joinroom", bytes - 1) == 0 && bytes - 1 == 9){
+            message = malloc(100);
+            strcpy(message, "Enter name of room you want to join: ");
+            send(client->FD, message, strlen(message), 0);
+            memset(buffer, 0, sizeof(buffer));
+            recv(client->FD, buffer, sizeof(buffer) - 1, 0);
+            buffer[bytes] = '\0';
+            buffer[strcspn(buffer, "\r\n")] = '\0';
+            if(bytes > 0){
+                changeRoom(client, buffer);
+            }
+        }
         else
-            broadcast(buffer, *client, 0, client->roomName);
+            broadcast(*client, buffer, 0);
 
     }
 
