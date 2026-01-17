@@ -7,7 +7,9 @@
 #include <stdbool.h>
 #include <pthread.h>
 
-// add encription, work with classes
+const char* CMD_ROOM = "/room";
+const char* CMD_CMDS = "/cmds";
+const char* CMD_JOINROOM = "/joinroom";
 
 typedef struct{
     int FD;
@@ -36,13 +38,13 @@ void broadcast(Client sender, char* message, bool option){
     pthread_mutex_unlock(&clientsMutex);
 }
 
-
 // changes client's roomName
 void changeRoom(Client* client, char* roomName){
     broadcast(*client, "disconnected!\n", 1);
 
     pthread_mutex_lock(&clientsMutex);
     strncpy(client->roomName, roomName, 16);
+    client->roomName[16] = '\0';
     char* message = malloc(100);
     snprintf(message, 100, "You entered a new room %s. Use /cmds to view commands.\n", client->roomName);
     send(client->FD, message, strlen(message), 0);
@@ -54,7 +56,7 @@ void changeRoom(Client* client, char* roomName){
 
 // print commands
 void printCommands(Client client){
-    char* message = "Command list:\n/cmds - Prints out commands you can use.\n/room - Prints out room name and active users in the room.\n/joinroom - Allows you to switch rooms without disconnecting.\n";
+    char* message = "Command list:\n/cmds - Prints out commands you can use.\n/room - Prints out room name and active users in the room.\n/joinroom room_name- Allows you to switch rooms without disconnecting.\n";
     send(client.FD, message, strlen(message), 0);
 }
 
@@ -119,6 +121,7 @@ void setUsername(Client* client){
     buffer[bytes] = '\0';
     buffer[strcspn(buffer, "\r\n")] = '\0';
     strncpy(client->roomName, buffer, 16);
+    client->roomName[16] = '\0';
     snprintf(message, 100, "You entered room %s. Use /cmds to view commands.\n", client->roomName);
     send(client->FD, message, strlen(message), 0);
     free(message);
@@ -165,20 +168,17 @@ void* chat(void* arg){
         
         printf("Client in room %s %d: %s\n", client->roomName, client->FD, buffer);
 
-        if(strncmp(buffer, "/room", bytes - 1) == 0 && bytes - 1 == 5)
+        if(strncmp(buffer, CMD_ROOM, strlen(CMD_ROOM)) == 0)
             printRoomInfo(*client);
-        else if(strncmp(buffer, "/cmds", bytes - 1) == 0 && bytes - 1 == 5)
+        else if(strncmp(buffer, CMD_CMDS, strlen(CMD_CMDS)) == 0)
             printCommands(*client);
-        else if (strncmp(buffer, "/joinroom", bytes - 1) == 0 && bytes - 1 == 9){
-            message = malloc(100);
-            strcpy(message, "Enter name of room you want to join: ");
-            send(client->FD, message, strlen(message), 0);
-            memset(buffer, 0, sizeof(buffer));
-            recv(client->FD, buffer, sizeof(buffer) - 1, 0);
-            buffer[bytes] = '\0';
-            buffer[strcspn(buffer, "\r\n")] = '\0';
-            if(bytes > 0){
-                changeRoom(client, buffer);
+        else if (strncmp(buffer, CMD_JOINROOM, strlen(CMD_JOINROOM)) == 0){
+            char* roomName = buffer + 10;
+            roomName[strlen(roomName)] = '\0';
+            roomName[strcspn(roomName, "\r\n")] = '\0';
+            if (strlen(roomName) > 0) {
+                changeRoom(client, roomName);
+                continue;
             }
         }
         else
